@@ -1,0 +1,108 @@
+# docker-compose.dokploy.yml
+# Production-ready configuration for Dokploy
+# Set environment variables in Dokploy's UI or .env file
+services:
+    happy-server:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        restart: unless-stopped
+        networks:
+            - happy-network
+        environment:
+            - NODE_ENV=production
+            - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-happy-server}
+            - REDIS_URL=redis://redis:6379
+            - SEED=${SEED}
+            - HANDY_MASTER_SECRET=${HANDY_MASTER_SECRET}
+            - PORT=3005
+            - S3_HOST=minio
+            - S3_PORT=9000
+            - S3_USE_SSL=false
+            - S3_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+            - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+            - S3_BUCKET=${S3_BUCKET:-happy}
+            - S3_PUBLIC_URL=${S3_PUBLIC_URL}
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_started
+            minio-init:
+                condition: service_completed_successfully
+        healthcheck:
+            test: ["CMD", "wget", "-q", "--spider", "http://localhost:3005/health"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 10s
+
+    postgres:
+        image: postgres:15
+        networks:
+            - happy-network
+        environment:
+            - POSTGRES_DB=${POSTGRES_DB:-happy-server}
+            - POSTGRES_USER=${POSTGRES_USER:-postgres}
+            - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres -d happy-server"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+            start_period: 10s
+
+    redis:
+        image: redis:7-alpine
+        networks:
+            - happy-network
+        volumes:
+            - redis_data:/data
+
+    minio:
+        image: minio/minio
+        networks:
+            - happy-network
+        environment:
+            - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+            - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+        volumes:
+            - minio_data:/data
+        command: server /data --console-address ":9001"
+        healthcheck:
+            test: ["CMD", "mc", "ready", "local"]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+
+    minio-init:
+        image: minio/mc
+        networks:
+            - happy-network
+        environment:
+            - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+            - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+            - S3_BUCKET=${S3_BUCKET:-happy}
+        depends_on:
+            minio:
+                condition: service_started
+        entrypoint: >
+            /bin/sh -c "
+            sleep 5;
+            mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+            mc mb -p local/$${S3_BUCKET} || true;
+            mc anonymous set download local/$${S3_BUCKET};
+            exit 0;
+            "
+
+networks:
+    happy-network:
+        driver: bridge
+
+volumes:
+    postgres_data:
+    redis_data:
+    minio_data:
+
