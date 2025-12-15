@@ -43,4 +43,12 @@ COPY --from=builder /app/prisma ./prisma
 EXPOSE 3000
 
 # Command to run migrations and start the application
-CMD ["sh", "-c", "npx prisma migrate deploy && yarn start"]
+CMD ["sh", "-c", "\
+    echo 'Waiting for database...'; \
+    until npx prisma migrate deploy; do \
+        echo 'Migration failed, retrying in 5 seconds...'; \
+        sleep 5; \
+    done; \
+    echo 'Migrations applied successfully'; \
+    yarn start \
+"]
